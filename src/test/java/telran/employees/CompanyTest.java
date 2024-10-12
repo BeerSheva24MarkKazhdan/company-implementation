@@ -1,18 +1,20 @@
 package telran.employees;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrowsExactly;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.NoSuchElementException;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import java.util.Iterator;
 
-public class CompanyTest {
+import telran.io.Persistable;
+
+
+
+
+ class CompanyTest {
 private static final long ID1 = 123;
 private static final int SALARY1 = 1000;
 private static final String DEPARTMENT1 = "QA";
@@ -77,8 +79,11 @@ void setCompany() {
 
 	@Test
 	void testIterator() {
+		runTestIterator(company);
+	}
+	private void runTestIterator(Company companyPar) {
 		Employee[] expected = {empl2, empl1, empl3};
-		Iterator<Employee> it = company.iterator();
+		Iterator<Employee> it = companyPar.iterator();
 		int index = 0;
 		while(it.hasNext()) {
 			assertEquals(expected[index++], it.next());
@@ -133,4 +138,21 @@ void setCompany() {
 			assertArrayEquals(new Manager[0], company.getManagersWithMostFactor());
 			assertArrayEquals(new String[] {DEPARTMENT1}, company.getDepartments());
 		}
+		@Test
+		void jsonTest() {
+			Employee empl = Employee.getEmployeeFromJSON("{\"basicSalary\":1000,\"className\":\"telran.employees.Manager\",\"id\":123,\"department\":\"QA\",\"factor\":2}");
+			assertEquals(empl, new Manager(ID1,SALARY1,DEPARTMENT1,FACTOR1));
+		}
+		@Test
+		void persistenceTest() {
+			if (company instanceof Persistable persCompany) {
+				persCompany.saveToFile("company.data");
+				CompanyImpl comp = new CompanyImpl();
+				comp.restoreFromFile("company.data");
+				runTestIterator(comp);
+			}
+		}
+	
+	
+
 }
