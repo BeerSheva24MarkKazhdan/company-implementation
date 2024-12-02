@@ -16,7 +16,7 @@ public class Manager extends Employee{
     public float getFactor() {
         return factor;
     }
-    
+
     @Override
     protected void fillJSON(JSONObject jsonObj) {
         super.fillJSON(jsonObj);
@@ -27,5 +27,5 @@ public class Manager extends Employee{
     protected void setObject(JSONObject jsonObj) {
         super.setObject(jsonObj);
         factor = jsonObj.getFloat("factor");
-     }
+    }
 }

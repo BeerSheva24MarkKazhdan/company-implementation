@@ -19,13 +19,17 @@ public class Employee {
             empl.setObject(jsonObj);
             return empl;
         } catch (Exception e) {
-           throw new RuntimeException(e);
+            throw new RuntimeException(e);
         }
     }
-   protected void setObject(JSONObject jsonObj) {
-       id = jsonObj.getLong("id");
-       basicSalary = jsonObj.getInt("basicSalary");
-       department = jsonObj.getString("department");
+
+    public int getBasicSalary() {
+        return basicSalary;
+    }
+    protected void setObject(JSONObject jsonObj) {
+        id = jsonObj.getLong("id");
+        basicSalary = jsonObj.getInt("basicSalary");
+        department = jsonObj.getString("department");
     }
     public Employee(long id, int basicSalary, String department) {
         this.id = id;
@@ -43,11 +47,11 @@ public class Employee {
     }
     @Override
     public boolean equals(Object obj) {
-       boolean res = false;
-       if (obj instanceof Employee empl) {
+        boolean res = false;
+        if (obj instanceof Employee empl) {
             res = id == empl.id;
-       }
-       return res;
+        }
+        return res;
     }
     @Override
     public String toString() {
@@ -56,7 +60,7 @@ public class Employee {
         fillJSON(jsonObj);
         return jsonObj.toString();
     }
-   protected void fillJSON(JSONObject jsonObj) {
+    protected void fillJSON(JSONObject jsonObj) {
         jsonObj.put("id",id);
         jsonObj.put("basicSalary", basicSalary);
         jsonObj.put("department", department);

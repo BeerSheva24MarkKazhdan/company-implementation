@@ -1,16 +1,23 @@
 package telran.employees;
 
-import java.util.*;
-
-import org.json.JSONObject;
-
 import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.*;
+import java.util.function.Supplier;
+
 import telran.io.Persistable;
 
 public class CompanyImpl implements Company, Persistable {
+    //FIXME introduce synchroniztion policy with the maximal concurreny
+    //Operations of not updating should run simultaniously
     private TreeMap<Long, Employee> employees = new TreeMap<>();
     private HashMap<String, List<Employee>> employeesDepartment = new HashMap<>();
     private TreeMap<Float, List<Manager>> managersFactor = new TreeMap<>();
+    private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
+    private final Lock readLock = rwLock.readLock();
+    private final Lock writeLock = rwLock.writeLock();
 
     private class CompanyIterator implements Iterator<Employee> {
         Iterator<Employee> iterator = employees.values().iterator();
@@ -29,8 +36,10 @@ public class CompanyImpl implements Company, Persistable {
 
         @Override
         public void remove() {
-            iterator.remove();
-            removeFromIndexMaps(lastIterated);
+            performWriteOperation(writeLock, () -> {
+                iterator.remove();
+                removeFromIndexMaps(lastIterated);
+            });
         }
     }
 
@@ -41,11 +50,13 @@ public class CompanyImpl implements Company, Persistable {
 
     @Override
     public void addEmployee(Employee empl) {
-        long id = empl.getId();
-        if (employees.putIfAbsent(id, empl) != null) {
-            throw new IllegalStateException("Already exists employee " + id);
-        }
-        addIndexMaps(empl);
+        performWriteOperation(writeLock, () -> {
+            long id = empl.getId();
+            if (employees.putIfAbsent(id, empl) != null) {
+                throw new IllegalStateException("Already exists employee " + id);
+            }
+            addIndexMaps(empl);
+        });
     }
 
     private void addIndexMaps(Employee empl) {
@@ -57,18 +68,23 @@ public class CompanyImpl implements Company, Persistable {
 
     @Override
     public Employee getEmployee(long id) {
-        return employees.get(id);
+        return performReadOperation(readLock, () -> employees.get(id));
     }
 
     @Override
     public Employee removeEmployee(long id) {
-        Employee empl = employees.remove(id);
-        if (empl == null) {
-            throw new NoSuchElementException("Not found employee " + id);
-        }
-        removeFromIndexMaps(empl);
-        return empl;
+        AtomicReference<Employee> result = new AtomicReference<>();
+        performWriteOperation(writeLock, () -> {
+            Employee empl = employees.remove(id);
+            if (empl == null) {
+                throw new NoSuchElementException("Not found employee " + id);
+            }
+            removeFromIndexMaps(empl);
+            result.set(empl);
+        });
+        return result.get();
     }
+
 
     private void removeFromIndexMaps(Employee empl) {
         removeIndexMap(empl.getDepartment(), employeesDepartment, empl);
@@ -87,87 +103,74 @@ public class CompanyImpl implements Company, Persistable {
 
     @Override
     public int getDepartmentBudget(String department) {
-        return employeesDepartment.getOrDefault(department, Collections.emptyList())
-                .stream().mapToInt(Employee::computeSalary).sum();
+        return performReadOperation(readLock, () -> employeesDepartment.getOrDefault(department, Collections.emptyList())
+                .stream().mapToInt(Employee::computeSalary).sum());
     }
 
     @Override
     public String[] getDepartments() {
-        return employeesDepartment.keySet().stream().sorted().toArray(String[]::new);
+        return performReadOperation(readLock, () -> employeesDepartment.keySet()
+                .stream().sorted().toArray(String[]::new));
     }
 
     @Override
     public Manager[] getManagersWithMostFactor() {
-        Manager[] res = new Manager[0];
-        if (!managersFactor.isEmpty()) {
-            res = managersFactor.lastEntry().getValue().toArray(res);
-        }
-        return res;
+        AtomicReference<Manager[]> result = new AtomicReference<>(new Manager[0]);
+        performReadOperation(readLock, () -> {
+            if (!managersFactor.isEmpty()) {
+                result.set(managersFactor.lastEntry().getValue().toArray(new Manager[0]));
+            }
+        });
+        return result.get();
     }
 
     @Override
     public void saveToFile(String fileName) {
-        try (PrintWriter writer = new PrintWriter(new FileOutputStream(fileName))) {
-            for (Employee employee : employees.values()) {
-                JSONObject jsonObj = new JSONObject();
-                jsonObj.put("className", employee.getClass().getName());
-                jsonObj.put("id", employee.getId());
-                jsonObj.put("department", employee.getDepartment());
-                jsonObj.put("basicSalary", employee.computeSalary());
-                if (employee instanceof Manager manager) {
-                    jsonObj.put("factor", manager.getFactor());
-                } else if (employee instanceof SalesPerson salesPerson) {
-                    jsonObj.put("wage", salesPerson.getWage());
-                    jsonObj.put("hours", salesPerson.getHours());
-                    jsonObj.put("percent", salesPerson.getPercent());
-                    jsonObj.put("sales", salesPerson.getSales());
-                } else if (employee instanceof WageEmployee wageEmployee) {
-                    jsonObj.put("wage", wageEmployee.getWage());
-                    jsonObj.put("hours", wageEmployee.getHours());
-                }
-                writer.println(jsonObj.toString());
+        performReadOperation(readLock, () -> {
+            try (PrintWriter writer = new PrintWriter(fileName)) {
+                forEach(writer::println);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to save data to file: " + fileName, e);
-        }
+        });
     }
 
     @Override
     public void restoreFromFile(String fileName) {
-        try (BufferedReader reader = new BufferedReader(new FileReader(fileName))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                JSONObject jsonObj = new JSONObject(line); 
-                Employee employee = textToEmployee(jsonObj); 
-                addEmployee(employee);
+        performWriteOperation(writeLock, () -> {
+            try (BufferedReader reader = Files.newBufferedReader(Path.of(fileName))) {
+                reader.lines().map(Employee::getEmployeeFromJSON).forEach(this::addEmployee);
+            } catch (NoSuchFileException e) {
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to restore data from file: " + fileName, e);
+        });
+    }
+
+    private static <T> T performReadOperation(Lock readLock, Supplier<T> readTask) {
+        readLock.lock();
+        try {
+            return readTask.get();
+        } finally {
+            readLock.unlock();
         }
     }
-    
-    private Employee textToEmployee(JSONObject jsonObj) {
-        Employee employee;
-        String className = jsonObj.getString("className");
-        long id = jsonObj.getLong("id");
-        String department = jsonObj.getString("department");
-        int basicSalary = jsonObj.getInt("basicSalary");
-        if ("telran.employees.Manager".equals(className)) {
-            float factor = jsonObj.getFloat("factor");
-            employee = new Manager(id, basicSalary, department, factor); 
-        } else if ("telran.employees.SalesPerson".equals(className)) {
-            int wage = jsonObj.getInt("wage");
-            int hours = jsonObj.getInt("hours");
-            float percent = jsonObj.getFloat("percent");
-            long sales = jsonObj.getLong("sales");
-            employee = new SalesPerson(id, basicSalary, department, wage, hours, percent, sales); 
-        } else if ("telran.employees.WageEmployee".equals(className)) {
-            int wage = jsonObj.getInt("wage");
-            int hours = jsonObj.getInt("hours");
-            employee = new WageEmployee(id, basicSalary, department, wage, hours); 
-        } else {
-            employee = new Employee(id, basicSalary, department); 
+
+    private static void performReadOperation(Lock readLock, Runnable readTask) {
+        readLock.lock();
+        try {
+            readTask.run();
+        } finally {
+            readLock.unlock();
         }
-        return employee;
+    }
+
+    private static void performWriteOperation(Lock writeLock, Runnable writeTask) {
+        writeLock.lock();
+        try {
+            writeTask.run();
+        } finally {
+            writeLock.unlock();
+        }
     }
 }
