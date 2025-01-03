@@ -15,9 +15,9 @@ public class CompanyImpl implements Company, Persistable {
     private TreeMap<Long, Employee> employees = new TreeMap<>();
     private HashMap<String, List<Employee>> employeesDepartment = new HashMap<>();
     private TreeMap<Float, List<Manager>> managersFactor = new TreeMap<>();
-    private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
-    private final Lock readLock = rwLock.readLock();
-    private final Lock writeLock = rwLock.writeLock();
+    private ReadWriteLock lock = new ReentrantReadWriteLock();
+    private Lock readLock = lock.readLock();
+    private Lock writeLock = lock.writeLock();
 
     private class CompanyIterator implements Iterator<Employee> {
         Iterator<Employee> iterator = employees.values().iterator();
@@ -36,10 +36,8 @@ public class CompanyImpl implements Company, Persistable {
 
         @Override
         public void remove() {
-            performWriteOperation(writeLock, () -> {
-                iterator.remove();
-                removeFromIndexMaps(lastIterated);
-            });
+            iterator.remove();
+            removeFromIndexMaps(lastIterated);
         }
     }
 
@@ -50,13 +48,17 @@ public class CompanyImpl implements Company, Persistable {
 
     @Override
     public void addEmployee(Employee empl) {
-        performWriteOperation(writeLock, () -> {
+        try {
+            writeLock.lock();
             long id = empl.getId();
             if (employees.putIfAbsent(id, empl) != null) {
                 throw new IllegalStateException("Already exists employee " + id);
             }
             addIndexMaps(empl);
-        });
+        } finally {
+            writeLock.unlock();
+        }
+
     }
 
     private void addIndexMaps(Employee empl) {
@@ -68,23 +70,30 @@ public class CompanyImpl implements Company, Persistable {
 
     @Override
     public Employee getEmployee(long id) {
-        return performReadOperation(readLock, () -> employees.get(id));
+        try {
+            readLock.lock();
+            return employees.get(id);
+        } finally {
+            readLock.unlock();
+        }
+
     }
 
     @Override
     public Employee removeEmployee(long id) {
-        AtomicReference<Employee> result = new AtomicReference<>();
-        performWriteOperation(writeLock, () -> {
+        try {
+            writeLock.lock();
             Employee empl = employees.remove(id);
             if (empl == null) {
                 throw new NoSuchElementException("Not found employee " + id);
             }
             removeFromIndexMaps(empl);
-            result.set(empl);
-        });
-        return result.get();
-    }
+            return empl;
+        } finally {
+            writeLock.unlock();
+        }
 
+    }
 
     private void removeFromIndexMaps(Employee empl) {
         removeIndexMap(empl.getDepartment(), employeesDepartment, empl);
@@ -103,74 +112,65 @@ public class CompanyImpl implements Company, Persistable {
 
     @Override
     public int getDepartmentBudget(String department) {
-        return performReadOperation(readLock, () -> employeesDepartment.getOrDefault(department, Collections.emptyList())
-                .stream().mapToInt(Employee::computeSalary).sum());
+        try {
+            readLock.lock();
+            return employeesDepartment.getOrDefault(department, Collections.emptyList())
+                    .stream().mapToInt(Employee::computeSalary).sum();
+        } finally {
+            readLock.unlock();
+        }
+
     }
 
     @Override
     public String[] getDepartments() {
-        return performReadOperation(readLock, () -> employeesDepartment.keySet()
-                .stream().sorted().toArray(String[]::new));
+        try {
+            readLock.lock();
+            return employeesDepartment.keySet().stream().sorted().toArray(String[]::new);
+        } finally {
+            readLock.unlock();
+        }
+
     }
 
     @Override
     public Manager[] getManagersWithMostFactor() {
-        AtomicReference<Manager[]> result = new AtomicReference<>(new Manager[0]);
-        performReadOperation(readLock, () -> {
+        try {
+            readLock.lock();
+            Manager[] res = new Manager[0];
             if (!managersFactor.isEmpty()) {
-                result.set(managersFactor.lastEntry().getValue().toArray(new Manager[0]));
+                res = managersFactor.lastEntry().getValue().toArray(res);
             }
-        });
-        return result.get();
+            return res;
+        } finally {
+            readLock.unlock();
+        }
+
     }
 
     @Override
     public void saveToFile(String fileName) {
-        performReadOperation(readLock, () -> {
+        try {
+            readLock.lock();
             try (PrintWriter writer = new PrintWriter(fileName)) {
                 forEach(writer::println);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
-        });
+        } finally {
+            readLock.unlock();
+        }
+
     }
 
     @Override
     public void restoreFromFile(String fileName) {
-        performWriteOperation(writeLock, () -> {
-            try (BufferedReader reader = Files.newBufferedReader(Path.of(fileName))) {
-                reader.lines().map(Employee::getEmployeeFromJSON).forEach(this::addEmployee);
-            } catch (NoSuchFileException e) {
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-    private static <T> T performReadOperation(Lock readLock, Supplier<T> readTask) {
-        readLock.lock();
-        try {
-            return readTask.get();
-        } finally {
-            readLock.unlock();
+        try (BufferedReader reader = Files.newBufferedReader(Path.of(fileName))) {
+            reader.lines().map(Employee::getEmployeeFromJSON).forEach(this::addEmployee);
+        } catch (NoSuchFileException e) {
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 
-    private static void performReadOperation(Lock readLock, Runnable readTask) {
-        readLock.lock();
-        try {
-            readTask.run();
-        } finally {
-            readLock.unlock();
-        }
-    }
-
-    private static void performWriteOperation(Lock writeLock, Runnable writeTask) {
-        writeLock.lock();
-        try {
-            writeTask.run();
-        } finally {
-            writeLock.unlock();
-        }
-    }
 }
