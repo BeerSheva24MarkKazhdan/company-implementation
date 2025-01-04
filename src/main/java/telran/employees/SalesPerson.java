@@ -29,4 +29,10 @@ public class SalesPerson extends WageEmployee{
         percent = jsonObj.getFloat("percent");
         sales = jsonObj.getLong("sales");
     }
+    public float getPercent() {
+        return percent;
+    }
+    public long getSales() {
+        return sales;
+    }
 }

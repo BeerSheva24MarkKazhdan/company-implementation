@@ -6,3 +6,4 @@ import telran.employees.Employee;
 public interface CompanyRepository {
     List<Employee> getEmployees();
 }
+
